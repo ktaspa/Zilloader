@@ -11,8 +11,12 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
+    allow_origins=[
+        'https://ktaspa.github.io',
+        'http://127.0.0.1:5500',
+        'http://localhost:5500'
+    ],
+    allow_credentials=False,
     allow_methods=['*'],
     allow_headers=['*']
 )
@@ -24,13 +28,22 @@ class AnalysisRequest(BaseModel):
     state: str
     zipcode: str
 
+@app.get('/')
+def root():
+    return {'message': 'Zilloader API is running'}
+
 @app.get('/health')
 def health():
     return {'ok': True}
 
 @app.post('/analyze')
 def analyze(payload: AnalysisRequest):
-    result = run_analysis(payload.city, payload.state, payload.zipcode)
-    if result is None:
-        raise HTTPException(status_code=404, detail='No listings found')
-    return result
+    try:
+        result = run_analysis(payload.city, payload.state, payload.zipcode)
+        if result is None:
+            raise HTTPException(status_code=404, detail='No listings found')
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
