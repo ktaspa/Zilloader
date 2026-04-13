@@ -23,7 +23,9 @@ function formatCurrency(value) {
 
 function formatNumber(value) {
   if (value === null || value === undefined) return 'N/A'
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0
+  }).format(value)
 }
 
 form.addEventListener('submit', async event => {
@@ -46,7 +48,8 @@ form.addEventListener('submit', async event => {
     })
 
     if (!response.ok) {
-      throw new Error('Analysis failed')
+      const errorText = await response.text()
+      throw new Error(errorText || 'Analysis failed')
     }
 
     const data = await response.json()
@@ -66,4 +69,16 @@ form.addEventListener('submit', async event => {
       div.innerHTML = `
         <div><strong>${property.address}</strong></div>
         <div>Price: ${formatCurrency(property.price)}</div>
+        <div>Predicted: ${formatCurrency(property.predicted_price)}</div>
+        <div>Sigma Score: ${property.sigma_score !== null && property.sigma_score !== undefined ? property.sigma_score.toFixed(2) : 'N/A'}</div>
+        <div><a href="${property.url}" target="_blank">View Listing</a></div>
+      `
+      propertyListEl.appendChild(div)
+    }
+
+    statusEl.textContent = `Finished for ${data.city}, ${data.state} ${data.zipcode}`
+    resultsEl.classList.remove('hidden')
+  } catch (error) {
+    statusEl.textContent = `Could not run analysis: ${error.message}`
+  }
 })
