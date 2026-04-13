@@ -32,19 +32,26 @@ def extract_sqft(features):
     match = re.search(r'([\d,]+)\s*sqft', features.lower())
     return int(match.group(1).replace(',', '')) if match else None
 
+def normalize_url(url):
+    if not url:
+        return ''
+    if url.startswith('/'):
+        return f'https://www.zillow.com{url}'
+    return url
+
 def build_search_url(city, state, zipcode, page_num):
     city_slug = slugify(city)
     if zipcode:
+        if page_num == 1:
+            return f'https://www.zillow.com/{city_slug}-{state}-{zipcode}/'
         return f'https://www.zillow.com/{city_slug}-{state}-{zipcode}/{page_num}_p/'
-    return f'https://www.zillow.com/homes/{city_slug},-{state}_rb/{page_num}_p/'
+    if page_num == 1:
+        return f'https://www.zillow.com/homes/{city_slug}-{state}_rb/'
+    return f'https://www.zillow.com/homes/{city_slug}-{state}_rb/{page_num}_p/'
 
-def make_context(browser):
-    return browser.new_context(
-        java_script_enabled=True,
-        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        viewport={'width': 1440, 'height': 1800},
-        locale='en-US'
-    )
+def save_debug_html(html_dir, city, state, zipcode, page_num, html):
+    debug_file = html_dir / f'debug_{slugify(city)}_{state}_{zipcode}_{page_num}.html'
+    debug_file.write_text(html, encoding='utf-8')
 
 def download_pages(city, state, zipcode, max_pages=3):
     html_dir = Path('tmp_html')
@@ -59,7 +66,13 @@ def download_pages(city, state, zipcode, max_pages=3):
             headless=True,
             args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
         )
-        context = make_context(browser)
+
+        context = browser.new_context(
+            java_script_enabled=True,
+            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            viewport={'width': 1440, 'height': 2200},
+            locale='en-US'
+        )
 
         for page_num in range(1, max_pages + 1):
             page = context.new_page()
@@ -67,30 +80,27 @@ def download_pages(city, state, zipcode, max_pages=3):
             print(f'Fetching URL: {url}')
 
             try:
-                response = page.goto(url, wait_until='networkidle', timeout=90000)
+                response = page.goto(url, wait_until='domcontentloaded', timeout=90000)
             except Exception as e:
                 print(f'Goto failed on page {page_num}: {e}')
                 page.close()
                 continue
 
-            status = response.status if response else 'no response'
-            title = page.title()
-            print(f'Response status: {status}')
-            print(f'Page title: {title}')
+            status_code = response.status if response else 'no response'
+            print(f'Response status: {status_code}')
+            print(f'Page title: {page.title()}')
 
             page.wait_for_timeout(5000)
 
-            for _ in range(10):
+            for _ in range(12):
                 page.mouse.wheel(0, 1800)
                 page.wait_for_timeout(400)
 
             full_html = page.content()
-            debug_file = html_dir / f'debug_{slugify(city)}_{state}_{zipcode}_{page_num}.html'
-            debug_file.write_text(full_html, encoding='utf-8')
+            save_debug_html(html_dir, city, state, zipcode, page_num, full_html)
 
             target = (
                 page.query_selector('div[id="search-page-list-container"]') or
-                page.query_selector('div.List-c11n-8-84-3-photo-cards') or
                 page.query_selector('div[class*="List-c11n"]') or
                 page.query_selector('main')
             )
@@ -111,49 +121,102 @@ def download_pages(city, state, zipcode, max_pages=3):
 
     return html_dir
 
-def normalize_url(url):
-    if not url:
-        return ''
-    if url.startswith('/'):
-        return f'https://www.zillow.com{url}'
-    return url
+def find_price(article):
+    price_element = article.find('span', {'data-test': 'property-card-price'})
+    if price_element is not None:
+        return price_element.get_text(' ', strip=True)
+
+    for tag in article.find_all(['span', 'div', 'strong']):
+        text = tag.get_text(' ', strip=True)
+        if re.search(r'\$[\d,]+', text):
+            return text
+
+    return None
+
+def find_address(article):
+    address_element = article.find('address', {'data-test': 'property-card-addr'})
+    if address_element is not None:
+        return address_element.get_text(' ', strip=True)
+
+    address_element = article.find('address')
+    if address_element is not None:
+        return address_element.get_text(' ', strip=True)
+
+    for tag in article.find_all(['div', 'span']):
+        text = tag.get_text(' ', strip=True)
+        if re.search(r'\d', text) and any(c.isalpha() for c in text) and '$' not in text and len(text) > 8:
+            return text
+
+    return None
+
+def find_features(article):
+    ul_element = article.find('ul')
+    if ul_element is not None:
+        features = [li.get_text(' ', strip=True) for li in ul_element.find_all('li') if li.get_text(' ', strip=True)]
+        if features:
+            return ', '.join(features)
+
+    texts = []
+    for tag in article.find_all(['li', 'span']):
+        text = tag.get_text(' ', strip=True)
+        if re.search(r'bd|ba|sqft', text.lower()):
+            texts.append(text)
+
+    return ', '.join(texts)
+
+def find_url(article):
+    link = article.find('a', href=True)
+    if link is not None:
+        return normalize_url(link['href'])
+    return ''
+
+def find_status(article):
+    text = article.get_text(' ', strip=True)
+
+    patterns = [
+        r'For sale',
+        r'Pending',
+        r'Contingent',
+        r'Coming soon',
+        r'Auction',
+        r'New construction',
+        r'Foreclosure'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(0)
+
+    return ''
 
 def parse_property_listing_info(article):
-    price_element = article.find('span', {'data-test': 'property-card-price'})
-    address_element = article.find('address', {'data-test': 'property-card-addr'})
-    ul_element = article.find('ul')
+    price_text = find_price(article)
+    address = find_address(article)
+    features_text = find_features(article)
+    url = find_url(article)
+    status = find_status(article)
+    price = clean_price(price_text)
 
-    if address_element is None:
-        address_element = article.find('address')
-
-    if ul_element is None:
-        ul_element = article.find('ul')
-
-    if price_element is None:
-        for span in article.find_all('span'):
-            text = span.get_text(' ', strip=True)
-            if '$' in text and re.search(r'\$\s*[\d,]+', text):
-                price_element = span
-                break
-
-    if price_element is None or address_element is None or ul_element is None:
+    if price is None or address is None:
         return None
 
-    price = clean_price(price_element.get_text(strip=True))
-    address = address_element.get_text(' ', strip=True)
-
-    link = article.find('a', href=True)
-    url = normalize_url(link['href']) if link else ''
-
-    features = [feature.get_text(' ', strip=True) for feature in ul_element.find_all('li')]
-    features_text = ', '.join(features)
-
-    parent_text = article.get_text(' ', strip=True)
-    status = ''
-    if '-' in parent_text:
-        status = parent_text.split('-')[-1].strip()
-
     return PropertyDetail(price, address, features_text, status, url)
+
+def get_property_elements(soup):
+    articles = soup.find_all('article')
+    if articles:
+        return articles
+
+    cards = soup.select('[data-test="property-card"]')
+    if cards:
+        return cards
+
+    cards = soup.select('li article')
+    if cards:
+        return cards
+
+    return []
 
 def parse_downloaded_html(html_dir):
     listings = []
@@ -161,18 +224,12 @@ def parse_downloaded_html(html_dir):
     for html_file in sorted(html_dir.glob('zillow_*.html')):
         print(f'Parsing file: {html_file}')
         soup = BeautifulSoup(html_file.read_text(encoding='utf-8'), 'html.parser')
+        property_elements = get_property_elements(soup)
+        print(f'Found property elements: {len(property_elements)}')
 
-        articles = soup.find_all('article')
-        print(f'Found articles: {len(articles)}')
-
-        if not articles:
-            cards = soup.select('[data-test="property-card"]')
-            print(f'Found property cards: {len(cards)}')
-            articles = cards
-
-        for article in articles:
-            property_info = parse_property_listing_info(article)
-            if property_info is not None and property_info.price is not None:
+        for element in property_elements:
+            property_info = parse_property_listing_info(element)
+            if property_info is not None:
                 listings.append(property_info)
 
     df = pd.DataFrame(listings)
