@@ -1,8 +1,11 @@
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from analysis import run_analysis
+
+Path('outputs').mkdir(exist_ok=True)
 
 app = FastAPI()
 
@@ -16,17 +19,14 @@ app.add_middleware(
 
 app.mount('/outputs', StaticFiles(directory='outputs'), name='outputs')
 
-
 class AnalysisRequest(BaseModel):
     city: str
     state: str
     zipcode: str
 
-
 @app.get('/health')
 def health():
     return {'ok': True}
-
 
 @app.post('/analyze')
 def analyze(payload: AnalysisRequest):
