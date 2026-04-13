@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zilloader</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Zilloader</h1>
+    <p class="subtitle">Basic Zillow analysis tool</p>
+
+    <form id="analysis-form" class="card">
+      <div class="row">
+        <input id="city" type="text" placeholder="City" required>
+        <input id="state" type="text" placeholder="State" maxlength="2" required>
+        <input id="zipcode" type="text" placeholder="Zipcode" required>
+      </div>
+      <button type="submit">Run Analysis</button>
+    </form>
+
+    <div id="status" class="status"></div>
+
+    <div id="results" class="hidden">
+      <div class="grid">
+        <div class="card stat">
+          <span>Listings</span>
+          <strong id="listing-count"></strong>
+        </div>
+        <div class="card stat">
+          <span>Average Price</span>
+          <strong id="average-price"></strong>
+        </div>
+        <div class="card stat">
+          <span>Average Sqft</span>
+          <strong id="average-sqft"></strong>
+        </div>
+        <div class="card stat">
+          <span>Undervalued</span>
+          <strong id="undervalued-count"></strong>
+        </div>
+      </div>
+
+      <div class="card links">
+        <a id="excel-link" target="_blank">Open Excel</a>
+        <a id="csv-link" target="_blank">Open CSV</a>
+      </div>
+
+      <div class="card">
+        <img id="chart" alt="Chart">
+      </div>
+
+      <div class="card">
+        <h2>Top undervalued properties</h2>
+        <div id="property-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

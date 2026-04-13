@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+playwright
+pandas
+beautifulsoup4
+openpyxl
+matplotlib
+numpy
+scikit-learn
+python-multipart
