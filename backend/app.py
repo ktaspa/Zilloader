@@ -41,7 +41,22 @@ def analyze(payload: AnalysisRequest):
     try:
         result = run_analysis(payload.city, payload.state, payload.zipcode)
         if result is None:
-            raise HTTPException(status_code=404, detail='No listings found')
+            return {
+                'city': payload.city,
+                'state': payload.state,
+                'zipcode': payload.zipcode,
+                'listing_count': 0,
+                'average_price': None,
+                'average_sqft': None,
+                'average_price_per_sqft': None,
+                'undervalued_count': 0,
+                'top_undervalued': [],
+                'csv_file': '',
+                'excel_file': '',
+                'chart_file': '',
+                'generated_at': '',
+                'message': 'No listings found'
+            }
         return result
     except HTTPException:
         raise

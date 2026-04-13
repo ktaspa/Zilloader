@@ -59,9 +59,10 @@ form.addEventListener('submit', async event => {
     averageSqftEl.textContent = formatNumber(data.average_sqft)
     undervaluedCountEl.textContent = formatNumber(data.undervalued_count)
 
-    excelLinkEl.href = `${API_BASE}/${data.excel_file}`
-    csvLinkEl.href = `${API_BASE}/${data.csv_file}`
-    chartEl.src = `${API_BASE}/${data.chart_file}`
+    excelLinkEl.href = data.excel_file ? `${API_BASE}/${data.excel_file}` : '#'
+    csvLinkEl.href = data.csv_file ? `${API_BASE}/${data.csv_file}` : '#'
+    chartEl.src = data.chart_file ? `${API_BASE}/${data.chart_file}` : ''
+    statusEl.textContent = data.message ? data.message : `Finished for ${data.city}, ${data.state} ${data.zipcode}`
 
     for (const property of data.top_undervalued) {
       const div = document.createElement('div')

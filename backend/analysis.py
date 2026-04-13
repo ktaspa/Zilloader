@@ -32,51 +32,109 @@ def extract_sqft(features):
     match = re.search(r'([\d,]+)\s*sqft', features.lower())
     return int(match.group(1).replace(',', '')) if match else None
 
+def build_search_url(city, state, zipcode, page_num):
+    city_slug = slugify(city)
+    if zipcode:
+        return f'https://www.zillow.com/{city_slug}-{state}-{zipcode}/{page_num}_p/'
+    return f'https://www.zillow.com/homes/{city_slug},-{state}_rb/{page_num}_p/'
+
+def make_context(browser):
+    return browser.new_context(
+        java_script_enabled=True,
+        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        viewport={'width': 1440, 'height': 1800},
+        locale='en-US'
+    )
+
 def download_pages(city, state, zipcode, max_pages=3):
     html_dir = Path('tmp_html')
     html_dir.mkdir(exist_ok=True)
 
-    for file in html_dir.glob('*.html'):
-        file.unlink()
-
-    city_slug = slugify(city)
+    for file in html_dir.glob('*'):
+        if file.is_file():
+            file.unlink()
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
+        browser = playwright.chromium.launch(
+            headless=True,
+            args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
+        )
+        context = make_context(browser)
 
         for page_num in range(1, max_pages + 1):
-            page = browser.new_page(java_script_enabled=True)
-            url = f'https://www.zillow.com/{city_slug}-{state}-{zipcode}/{page_num}_p/'
-            response = page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            page = context.new_page()
+            url = build_search_url(city, state, zipcode, page_num)
+            print(f'Fetching URL: {url}')
 
-            if response is None or response.status == 404:
-                page.close()
-                break
-
-            page.wait_for_timeout(3000)
-            target = page.query_selector('div[id="search-page-list-container"]')
-
-            if target is None:
+            try:
+                response = page.goto(url, wait_until='networkidle', timeout=90000)
+            except Exception as e:
+                print(f'Goto failed on page {page_num}: {e}')
                 page.close()
                 continue
 
-            for _ in range(8):
-                target.evaluate('element => element.scrollBy(0, 1200)')
-                page.wait_for_timeout(250)
+            status = response.status if response else 'no response'
+            title = page.title()
+            print(f'Response status: {status}')
+            print(f'Page title: {title}')
 
-            html = target.inner_html()
-            output = html_dir / f'zillow_{city_slug}_{state}_{zipcode}_{page_num}.html'
+            page.wait_for_timeout(5000)
+
+            for _ in range(10):
+                page.mouse.wheel(0, 1800)
+                page.wait_for_timeout(400)
+
+            full_html = page.content()
+            debug_file = html_dir / f'debug_{slugify(city)}_{state}_{zipcode}_{page_num}.html'
+            debug_file.write_text(full_html, encoding='utf-8')
+
+            target = (
+                page.query_selector('div[id="search-page-list-container"]') or
+                page.query_selector('div.List-c11n-8-84-3-photo-cards') or
+                page.query_selector('div[class*="List-c11n"]') or
+                page.query_selector('main')
+            )
+
+            print(f'Target found: {target is not None}')
+
+            if target is not None:
+                html = target.inner_html()
+            else:
+                html = full_html
+
+            output = html_dir / f'zillow_{slugify(city)}_{state}_{zipcode}_{page_num}.html'
             output.write_text(html, encoding='utf-8')
             page.close()
 
+        context.close()
         browser.close()
 
     return html_dir
+
+def normalize_url(url):
+    if not url:
+        return ''
+    if url.startswith('/'):
+        return f'https://www.zillow.com{url}'
+    return url
 
 def parse_property_listing_info(article):
     price_element = article.find('span', {'data-test': 'property-card-price'})
     address_element = article.find('address', {'data-test': 'property-card-addr'})
     ul_element = article.find('ul')
+
+    if address_element is None:
+        address_element = article.find('address')
+
+    if ul_element is None:
+        ul_element = article.find('ul')
+
+    if price_element is None:
+        for span in article.find_all('span'):
+            text = span.get_text(' ', strip=True)
+            if '$' in text and re.search(r'\$\s*[\d,]+', text):
+                price_element = span
+                break
 
     if price_element is None or address_element is None or ul_element is None:
         return None
@@ -84,26 +142,33 @@ def parse_property_listing_info(article):
     price = clean_price(price_element.get_text(strip=True))
     address = address_element.get_text(' ', strip=True)
 
-    address_parent = address_element.parent
-    url = address_parent.get('href', '') if address_parent else ''
-
-    if url.startswith('/'):
-        url = f'https://www.zillow.com{url}'
+    link = article.find('a', href=True)
+    url = normalize_url(link['href']) if link else ''
 
     features = [feature.get_text(' ', strip=True) for feature in ul_element.find_all('li')]
     features_text = ', '.join(features)
 
-    parent_text = ul_element.parent.get_text(' ', strip=True)
-    status = parent_text.split('-')[-1].strip() if '-' in parent_text else ''
+    parent_text = article.get_text(' ', strip=True)
+    status = ''
+    if '-' in parent_text:
+        status = parent_text.split('-')[-1].strip()
 
     return PropertyDetail(price, address, features_text, status, url)
 
 def parse_downloaded_html(html_dir):
     listings = []
 
-    for html_file in html_dir.glob('*.html'):
+    for html_file in sorted(html_dir.glob('zillow_*.html')):
+        print(f'Parsing file: {html_file}')
         soup = BeautifulSoup(html_file.read_text(encoding='utf-8'), 'html.parser')
+
         articles = soup.find_all('article')
+        print(f'Found articles: {len(articles)}')
+
+        if not articles:
+            cards = soup.select('[data-test="property-card"]')
+            print(f'Found property cards: {len(cards)}')
+            articles = cards
 
         for article in articles:
             property_info = parse_property_listing_info(article)
@@ -119,7 +184,10 @@ def parse_downloaded_html(html_dir):
     df['beds'] = df['features'].apply(extract_beds)
     df['baths'] = df['features'].apply(extract_baths)
     df['sqft'] = df['features'].apply(extract_sqft)
-    df['price_per_sqft'] = df.apply(lambda row: row['price'] / row['sqft'] if pd.notna(row['sqft']) and row['sqft'] else np.nan, axis=1)
+    df['price_per_sqft'] = df.apply(
+        lambda row: row['price'] / row['sqft'] if pd.notna(row['sqft']) and row['sqft'] else np.nan,
+        axis=1
+    )
 
     return df
 
@@ -166,7 +234,7 @@ def save_chart(df, output_path, area_label):
     plt.figure(figsize=(8, 5))
     plt.scatter(chart_df['sqft'], chart_df['price'])
 
-    if not chart_df.empty:
+    if not chart_df.empty and len(chart_df) >= 2:
         z = np.polyfit(chart_df['sqft'], chart_df['price'], 1)
         p = np.poly1d(z)
         x_line = np.linspace(chart_df['sqft'].min(), chart_df['sqft'].max(), 100)
